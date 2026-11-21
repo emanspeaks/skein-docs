@@ -1,0 +1,88 @@
+# Builds the skein documentation site from chasingdaylight/skein and
+# publishes it with this repository's GitHub Pages, under this repository's
+# custom domain. The site is built by skein's own script (tools/site.sh), as
+# its own Pages workflow does, so both sites are the same.
+#
+# Runs every day, on a push here, and by hand (Actions > Documentation site
+# mirror > Run workflow), where another branch or tag of skein can be named.
+# No secret is needed: skein is public.
+name: Documentation site mirror
+
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch or tag of chasingdaylight/skein to build
+        default: main
+        type: string
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  ZIG_VERSION: 0.17.1
+
+jobs:
+  build:
+    name: Build the site
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: chasingdaylight/skein
+          ref: ${{ inputs.ref || 'main' }}
+
+      - uses: randyos-org/setup-zig@node24  # v2.2.1 on Node.js 24, until upstream releases it
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - name: Build skein
+        run: zig build
+
+      - name: Put the site's source together
+        run: bash tools/site.sh .site/src
+
+      - name: Build the pages
+        uses: actions/jekyll-build-pages@v1
+        with:
+          source: .site/src
+          destination: ./_site
+
+      # the site is served under more than one domain: no page may name one
+      - name: No page names a domain of the site
+        run: |
+          if grep -rIl -e 'chasingdaylight\.dev' -e 'randyeckman\.com' _site; then
+            echo "::error::these pages name a domain the site is served under"
+            exit 1
+          fi
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: ./_site
+
+  deploy:
+    name: Publish
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
